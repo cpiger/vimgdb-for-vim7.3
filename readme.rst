@@ -48,4 +48,3 @@ c) Install vimGdb runtime:
    cannot jump to the taglist help topics. You can now use the ":help
    vimgdb" command to get the vimGdb documentation.
 			
-  	  	 
