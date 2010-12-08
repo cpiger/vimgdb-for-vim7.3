@@ -10,11 +10,12 @@ The patch vimgdb implements full gdb support in the vim editor: breakpoints, wat
 gdb command completion, assembly windows, etc.
 
 
-vimGdb install
+vimgdb install
 **************
 a) You need:
 
 vim-7.3.tar.bz2                 http://www.vim.org/sources.php 
+
 vimgdb-for-vim7.3 (this patch)   https://github.com/larrupingpig/vimgdb-for-vim7.3 
 
 b) Untar all files, apply the patch and make Vim:
@@ -24,10 +25,13 @@ tar xjvf  vim-7.3.tar.bz2  -C /tmp
 tar xzvf  vimgdb-for-vim7.3.tar.gz  -C /tmp
 
 cd /tmp
+
 patch  -p0 < vimgdb-for-vim7.3/vim73.patch
 
 cd vim73/src
+
 make
+
 sudo make install
 
 IMPORTANT NOTE: you must run make (not ./configure), and if you run
