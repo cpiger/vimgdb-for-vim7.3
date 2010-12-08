@@ -52,3 +52,4 @@ Change to the doc directory, start Vim and run the ":helptags ."
 command to process the taglist help file. Without this step, you
 cannot jump to the taglist help topics. You can now use the ":help
 vimgdb" command to get the vimGdb documentation.
+
