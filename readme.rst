@@ -20,6 +20,7 @@ vimgdb-for-vim7.3 (this patch)   https://github.com/larrupingpig/vimgdb-for-vim7
 b) Untar all files, apply the patch and make Vim:
 
 tar xjvf  vim-7.3.tar.bz2  -C /tmp
+
 tar xzvf  vimgdb-for-vim7.3.tar.gz  -C /tmp
 
 cd /tmp
