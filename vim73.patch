@@ -1,6 +1,175 @@
+diff -uNr vim73old/src/auto/configure vim73/src/auto/configure
+--- vim73old/src/auto/configure	2010-08-13 22:17:15.000000000 +0800
++++ vim73/src/auto/configure	2011-04-25 09:08:36.000000000 +0800
+@@ -603,6 +603,8 @@
+ HANGULIN_SRC
+ GUI_X_LIBS
+ GUITYPE
++GDB_SRC
++GDB_OBJ
+ GUI_LIB_LOC
+ GUI_INC_LOC
+ NARROW_PROTO
+@@ -770,6 +772,7 @@
+ enable_cscope
+ enable_workshop
+ enable_netbeans
++enable_gdb
+ enable_sniff
+ enable_multibyte
+ enable_hangulinput
+@@ -1430,6 +1433,7 @@
+   --enable-rubyinterp     Include Ruby interpreter.
+   --enable-cscope         Include cscope interface.
+   --enable-workshop       Include Sun Visual Workshop support.
++  --enable-gdb		  Include GDB support.
+   --disable-netbeans      Disable NetBeans integration support.
+   --enable-sniff          Include Sniff interface.
+   --enable-multibyte      Include multibyte editing support.
+@@ -6241,6 +6245,18 @@
+ 
+ fi
+ 
++echo "$as_me:$LINENO: checking --enable-gdb argument" >&5
++echo $ECHO_N "checking --enable-gdb argument... $ECHO_C" >&6
++# Check whether --enable-gdb or --disable-gdb was given.
++if test "${enable_gdb+set}" = set; then
++  enableval="$enable_gdb"
++
++else
++  enable_gdb="no"
++fi;
++echo "$as_me:$LINENO: result: $enable_gdb" >&5
++echo "${ECHO_T}$enable_gdb" >&6
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking --enable-workshop argument" >&5
+ $as_echo_n "checking --enable-workshop argument... " >&6; }
+ # Check whether --enable-workshop was given.
+@@ -8600,6 +8616,22 @@
+ 
+ 
+ 
++if test "$enable_gdb" = "yes"; then
++  cat >>confdefs.h <<\_ACEOF
++#define FEAT_GDB 1
++_ACEOF
++
++  if test "x$GUITYPE" = "xNONE"; then
++    GDB_SRC="gdb.c clewn/gdb_lvl2.c clewn/gdb_lvl3.c clewn/misc.c clewn/obstack.c pty.c"
++    GDB_OBJ="objects/gdb.o objects/gdb_lvl2.o objects/gdb_lvl3.o objects/misc.o objects/obstack.o objects/pty.o"
++  else
++    GDB_SRC="gdb.c clewn/gdb_lvl2.c clewn/gdb_lvl3.c clewn/misc.c clewn/obstack.c"
++    GDB_OBJ="objects/gdb.o objects/gdb_lvl2.o objects/gdb_lvl3.o objects/misc.o objects/obstack.o"
++  fi
++
++
++fi
++
+ 
+ if test "$enable_workshop" = "yes" -a -n "$SKIP_MOTIF"; then
+   as_fn_error "cannot use workshop without Motif" "$LINENO" 5
+diff -uNr vim73old/src/buffer.c vim73/src/buffer.c
+--- vim73old/src/buffer.c	2010-08-13 17:14:35.000000000 +0800
++++ vim73/src/buffer.c	2011-04-25 09:08:36.000000000 +0800
+@@ -624,6 +624,9 @@
+ #ifdef FEAT_AUTOCMD
+     aubuflocal_remove(buf);
+ #endif
++#ifdef FEAT_GDB
++    gdb_buffer_free(gdb, buf);
++#endif
+     vim_free(buf);
+ }
+ 
+@@ -5173,7 +5176,7 @@
+ 	newsign->lnum = lnum;
+ 	newsign->typenr = typenr;
+ 	newsign->next = next;
+-#ifdef FEAT_NETBEANS_INTG
++#if defined(FEAT_NETBEANS_INTG) || defined(FEAT_GDB)
+ 	newsign->prev = prev;
+ 	if (next != NULL)
+ 	    next->prev = newsign;
+@@ -5219,12 +5222,12 @@
+ 	    return;
+ 	}
+ 	else if (
+-#ifndef FEAT_NETBEANS_INTG  /* keep signs sorted by lnum */
++#if !defined(FEAT_NETBEANS_INTG) && !defined(FEAT_GDB)  /* keep signs sorted by lnum */
+ 		   id < 0 &&
+ #endif
+ 			     lnum < sign->lnum)
+ 	{
+-#ifdef FEAT_NETBEANS_INTG /* insert new sign at head of list for this lnum */
++#if defined(FEAT_NETBEANS_INTG) || defined(FEAT_GDB) /* insert new sign at head of list for this lnum */
+ 	    /* XXX - GRP: Is this because of sign slide problem? Or is it
+ 	     * really needed? Or is it because we allow multiple signs per
+ 	     * line? If so, should I add that feature to FEAT_SIGNS?
+@@ -5241,7 +5244,7 @@
+ 	}
+ 	prev = sign;
+     }
+-#ifdef FEAT_NETBEANS_INTG /* insert new sign at head of list for this lnum */
++#if defined(FEAT_NETBEANS_INTG) || defined(FEAT_GDB) /* insert new sign at head of list for this lnum */
+     /* XXX - GRP: See previous comment */
+     while (prev != NULL && prev->lnum == lnum)
+ 	prev = prev->prev;
+@@ -5317,7 +5320,7 @@
+ 	if (sign->id == id)
+ 	{
+ 	    *lastp = next;
+-#ifdef FEAT_NETBEANS_INTG
++#if defined(FEAT_NETBEANS_INTG) || defined(FEAT_GDB)
+ 	    if (next != NULL)
+ 		next->prev = sign->prev;
+ #endif
+@@ -5497,6 +5500,35 @@
+     long	amount_after;
+ {
+     signlist_T	*sign;		/* a sign in a b_signlist */
++# ifdef FEAT_GDB
++    int lnum;
++
++    for (sign = curbuf->b_signlist; sign != NULL; sign = sign->next)
++    {
++	lnum = sign->lnum;
++
++	if (sign->lnum >= line1 && sign->lnum <= line2)
++	{
++	    if (amount == MAXLNUM)
++		lnum = line1;
++	    else
++		lnum += amount;
++	}
++	else if (sign->lnum > line2)
++	    lnum += amount_after;
++
++	/* Keep sign->lnum unchanged, but mark as changed the sign line and
++	 * the new line position if we had moved the line
++	 * (otherwise their highlighting may be scrolled along) */
++	if (gdb_isrunning(gdb) && lnum != sign->lnum)
++	{
++	    changed_lines(sign->lnum, 0, sign->lnum + 1, 0);
++	    changed_lines(lnum, 0, lnum + 1, 0);
++	}
++	else
++	    sign->lnum = lnum;
++    }
++# else
+ 
+     for (sign = curbuf->b_signlist; sign != NULL; sign = sign->next)
+     {
+@@ -5510,6 +5542,7 @@
+ 	else if (sign->lnum > line2)
+ 	    sign->lnum += amount_after;
+     }
++# endif
+ }
+ #endif /* FEAT_SIGNS */
+ 
 diff -uNr vim73old/src/clewn/gdb.h vim73/src/clewn/gdb.h
 --- vim73old/src/clewn/gdb.h	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/gdb.h	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/gdb.h	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,685 @@
 +/* vi:set ts=8 sts=4 sw=4:
 + *
@@ -689,7 +858,7 @@ diff -uNr vim73old/src/clewn/gdb.h vim73/src/clewn/gdb.h
 +
 diff -uNr vim73old/src/clewn/gdb_lvl2.c vim73/src/clewn/gdb_lvl2.c
 --- vim73old/src/clewn/gdb_lvl2.c	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/gdb_lvl2.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/gdb_lvl2.c	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,1085 @@
 +/* vi:set ts=8 sts=4 sw=4:
 + *
@@ -1778,7 +1947,7 @@ diff -uNr vim73old/src/clewn/gdb_lvl2.c vim73/src/clewn/gdb_lvl2.c
 +#endif /* defined(FEAT_GDB) || defined(HAVE_CLEWN) */
 diff -uNr vim73old/src/clewn/gdb_lvl3.c vim73/src/clewn/gdb_lvl3.c
 --- vim73old/src/clewn/gdb_lvl3.c	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/gdb_lvl3.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/gdb_lvl3.c	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,4116 @@
 +/* vi:set ts=8 sts=4 sw=4:
 + *
@@ -5898,7 +6067,7 @@ diff -uNr vim73old/src/clewn/gdb_lvl3.c vim73/src/clewn/gdb_lvl3.c
 +#endif /* defined(FEAT_GDB) || defined(HAVE_CLEWN) */
 diff -uNr vim73old/src/clewn/misc.c vim73/src/clewn/misc.c
 --- vim73old/src/clewn/misc.c	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/misc.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/misc.c	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,645 @@
 +/* vi:set ts=8 sts=4 sw=4:
 + *
@@ -6547,7 +6716,7 @@ diff -uNr vim73old/src/clewn/misc.c vim73/src/clewn/misc.c
 +}
 diff -uNr vim73old/src/clewn/misc.h vim73/src/clewn/misc.h
 --- vim73old/src/clewn/misc.h	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/misc.h	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/misc.h	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,92 @@
 +/* vi:set ts=8 sts=4 sw=4:
 + *
@@ -6643,7 +6812,7 @@ diff -uNr vim73old/src/clewn/misc.h vim73/src/clewn/misc.h
 +
 diff -uNr vim73old/src/clewn/obstack.c vim73/src/clewn/obstack.c
 --- vim73old/src/clewn/obstack.c	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/obstack.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/obstack.c	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,442 @@
 +/* obstack.c - subroutines used implicitly by object stack macros
 +   Copyright (C) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1996, 1997, 1998,
@@ -7089,7 +7258,7 @@ diff -uNr vim73old/src/clewn/obstack.c vim73/src/clewn/obstack.c
 +#endif	/* !ELIDE_CODE */
 diff -uNr vim73old/src/clewn/obstack.h vim73/src/clewn/obstack.h
 --- vim73old/src/clewn/obstack.h	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/clewn/obstack.h	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/clewn/obstack.h	2011-04-25 09:08:38.000000000 +0800
 @@ -0,0 +1,509 @@
 +/* obstack.h - object stack macros
 +   Copyright (C) 1988-1994,1996-1999,2003,2004,2005
@@ -7602,7 +7771,7 @@ diff -uNr vim73old/src/clewn/obstack.h vim73/src/clewn/obstack.h
 +#endif /* obstack.h */
 diff -uNr vim73old/src/config.h.in vim73/src/config.h.in
 --- vim73old/src/config.h.in	2010-08-13 21:45:27.000000000 +0800
-+++ vim73/src/config.h.in	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/config.h.in	2011-04-25 09:08:35.000000000 +0800
 @@ -417,6 +417,10 @@
  /* Define if you want to include Sun Visual Workshop support. */
  #undef FEAT_SUN_WORKSHOP
@@ -7616,7 +7785,7 @@ diff -uNr vim73old/src/config.h.in vim73/src/config.h.in
  
 diff -uNr vim73old/src/config.mk.in vim73/src/config.mk.in
 --- vim73old/src/config.mk.in	2010-07-17 23:28:51.000000000 +0800
-+++ vim73/src/config.mk.in	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/config.mk.in	2011-04-25 09:08:36.000000000 +0800
 @@ -85,6 +85,9 @@
  WORKSHOP_SRC	= @WORKSHOP_SRC@
  WORKSHOP_OBJ	= @WORKSHOP_OBJ@
@@ -7629,7 +7798,7 @@ diff -uNr vim73old/src/config.mk.in vim73/src/config.mk.in
  
 diff -uNr vim73old/src/configure.in vim73/src/configure.in
 --- vim73old/src/configure.in	2010-08-13 22:15:17.000000000 +0800
-+++ vim73/src/configure.in	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/configure.in	2011-04-25 09:08:35.000000000 +0800
 @@ -1383,6 +1383,13 @@
    AC_DEFINE(FEAT_CSCOPE)
  fi
@@ -7667,7 +7836,7 @@ diff -uNr vim73old/src/configure.in vim73/src/configure.in
  fi
 diff -uNr vim73old/src/eval.c vim73/src/eval.c
 --- vim73old/src/eval.c	2010-08-10 04:12:14.000000000 +0800
-+++ vim73/src/eval.c	2010-11-14 21:06:08.000000000 +0800
++++ vim73/src/eval.c	2011-04-25 09:08:36.000000000 +0800
 @@ -559,6 +559,9 @@
  static void f_foreground __ARGS((typval_T *argvars, typval_T *rettv));
  static void f_function __ARGS((typval_T *argvars, typval_T *rettv));
@@ -7727,7 +7896,7 @@ diff -uNr vim73old/src/eval.c vim73/src/eval.c
  #endif
 diff -uNr vim73old/src/ex_getln.c vim73/src/ex_getln.c
 --- vim73old/src/ex_getln.c	2010-08-14 23:25:45.000000000 +0800
-+++ vim73/src/ex_getln.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/ex_getln.c	2011-04-25 09:08:35.000000000 +0800
 @@ -725,6 +725,12 @@
  #ifdef FEAT_CMDWIN
  	if (c == cedit_key || c == K_CMDWIN)
@@ -7806,7 +7975,7 @@ diff -uNr vim73old/src/ex_getln.c vim73/src/ex_getln.c
  	    ccline.cmdpos = curwin->w_cursor.col;
 diff -uNr vim73old/src/feature.h vim73/src/feature.h
 --- vim73old/src/feature.h	2010-07-28 03:45:42.000000000 +0800
-+++ vim73/src/feature.h	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/feature.h	2011-04-25 09:08:39.000000000 +0800
 @@ -1244,6 +1244,24 @@
  # endif
  #endif
@@ -7834,7 +8003,7 @@ diff -uNr vim73old/src/feature.h vim73/src/feature.h
   *			debugger and for tooltips.
 diff -uNr vim73old/src/gdb.c vim73/src/gdb.c
 --- vim73old/src/gdb.c	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/gdb.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/gdb.c	2011-04-25 09:08:36.000000000 +0800
 @@ -0,0 +1,2458 @@
 +/* vi:set ts=8 sts=4 sw=4:
 + *
@@ -10296,7 +10465,7 @@ diff -uNr vim73old/src/gdb.c vim73/src/gdb.c
 +
 diff -uNr vim73old/src/globals.h vim73/src/globals.h
 --- vim73old/src/globals.h	2010-07-24 03:20:45.000000000 +0800
-+++ vim73/src/globals.h	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/globals.h	2011-04-25 09:08:36.000000000 +0800
 @@ -1212,6 +1212,10 @@
  extern cursorentry_T shape_table[SHAPE_IDX_COUNT];
  #endif
@@ -10310,7 +10479,7 @@ diff -uNr vim73old/src/globals.h vim73/src/globals.h
   * Printer stuff shared between hardcopy.c and machine-specific printing code.
 diff -uNr vim73old/src/gui.c vim73/src/gui.c
 --- vim73old/src/gui.c	2010-08-08 21:01:18.000000000 +0800
-+++ vim73/src/gui.c	2010-12-08 12:41:26.000000000 +0800
++++ vim73/src/gui.c	2011-04-25 09:08:36.000000000 +0800
 @@ -1295,8 +1295,11 @@
      /* Flush pending output before redrawing */
      out_flush();
@@ -10428,7 +10597,7 @@ diff -uNr vim73old/src/gui.c vim73/src/gui.c
      gui_mch_stop_blink();
 diff -uNr vim73old/src/gui_gtk_x11.c vim73/src/gui_gtk_x11.c
 --- vim73old/src/gui_gtk_x11.c	2010-08-15 19:52:15.000000000 +0800
-+++ vim73/src/gui_gtk_x11.c	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/gui_gtk_x11.c	2011-04-25 09:08:35.000000000 +0800
 @@ -5328,7 +5328,13 @@
  gui_mch_update(void)
  {
@@ -10524,7 +10693,7 @@ diff -uNr vim73old/src/gui_gtk_x11.c vim73/src/gui_gtk_x11.c
      /*
 diff -uNr vim73old/src/gui_x11.c vim73/src/gui_x11.c
 --- vim73old/src/gui_x11.c	2010-08-08 21:05:45.000000000 +0800
-+++ vim73/src/gui_x11.c	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/gui_x11.c	2011-04-25 09:08:38.000000000 +0800
 @@ -148,6 +148,9 @@
  #ifdef FEAT_SNIFF
  static void gui_x11_sniff_request_cb __ARGS((XtPointer closure, int *source, XtInputId *id));
@@ -10627,7 +10796,7 @@ diff -uNr vim73old/src/gui_x11.c vim73/src/gui_x11.c
  }
 diff -uNr vim73old/src/main.c vim73/src/main.c
 --- vim73old/src/main.c	2010-08-08 21:09:55.000000000 +0800
-+++ vim73/src/main.c	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/main.c	2011-04-25 09:08:36.000000000 +0800
 @@ -197,6 +197,10 @@
      vim_tcl_init(params.argv[0]);
  #endif
@@ -10653,7 +10822,7 @@ diff -uNr vim73old/src/main.c vim73/src/main.c
  	/* Write out the registers, history, marks etc, to the viminfo file */
 diff -uNr vim73old/src/Makefile vim73/src/Makefile
 --- vim73old/src/Makefile	2010-08-15 20:56:15.000000000 +0800
-+++ vim73/src/Makefile	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/Makefile	2011-04-25 09:08:38.000000000 +0800
 @@ -310,14 +310,14 @@
  # Change this to your desire and do 'make config' afterwards
  
@@ -10857,7 +11026,7 @@ diff -uNr vim73old/src/Makefile vim73/src/Makefile
   auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
 diff -uNr vim73old/src/normal.c vim73/src/normal.c
 --- vim73old/src/normal.c	2010-07-31 21:25:19.000000000 +0800
-+++ vim73/src/normal.c	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/normal.c	2011-04-25 09:08:39.000000000 +0800
 @@ -648,9 +648,23 @@
      dont_scroll = FALSE;	/* allow scrolling here */
  #endif
@@ -10956,7 +11125,7 @@ diff -uNr vim73old/src/normal.c vim73/src/normal.c
      if (cap->arg)		/* TRUE for CTRL-C */
 diff -uNr vim73old/src/option.c vim73/src/option.c
 --- vim73old/src/option.c	2010-08-05 02:49:18.000000000 +0800
-+++ vim73/src/option.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/option.c	2011-04-25 09:08:36.000000000 +0800
 @@ -544,6 +544,12 @@
  			    {(char_u *)0L, (char_u *)0L}
  #endif
@@ -10987,7 +11156,7 @@ diff -uNr vim73old/src/option.c vim73/src/option.c
  			    {(char_u *)FALSE, (char_u *)0L} SCRIPTID_INIT},
 diff -uNr vim73old/src/option.h vim73/src/option.h
 --- vim73old/src/option.h	2010-07-25 22:15:02.000000000 +0800
-+++ vim73/src/option.h	2010-11-14 21:06:08.000000000 +0800
++++ vim73/src/option.h	2011-04-25 09:08:36.000000000 +0800
 @@ -564,6 +564,11 @@
  EXTERN char_u	*p_isp;		/* 'isprint' */
  EXTERN int	p_js;		/* 'joinspaces' */
@@ -11002,7 +11171,7 @@ diff -uNr vim73old/src/option.h vim73/src/option.h
  #endif
 diff -uNr vim73old/src/os_unix.c vim73/src/os_unix.c
 --- vim73old/src/os_unix.c	2010-08-08 21:14:04.000000000 +0800
-+++ vim73/src/os_unix.c	2010-11-14 21:06:08.000000000 +0800
++++ vim73/src/os_unix.c	2011-04-25 09:08:39.000000000 +0800
 @@ -184,6 +184,9 @@
  /* volatile because it is used in signal handler sig_alarm(). */
  static volatile int sig_alarm_called;
@@ -11279,7 +11448,7 @@ diff -uNr vim73old/src/os_unix.c vim73/src/os_unix.c
  	    sniff_disconnect(1);
 diff -uNr vim73old/src/proto/gdb.pro vim73/src/proto/gdb.pro
 --- vim73old/src/proto/gdb.pro	1970-01-01 08:00:00.000000000 +0800
-+++ vim73/src/proto/gdb.pro	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/proto/gdb.pro	2011-04-25 09:08:35.000000000 +0800
 @@ -0,0 +1,22 @@
 +/* gdb.c */
 +gdb_handle_T *gdb_new __ARGS((void));
@@ -11305,7 +11474,7 @@ diff -uNr vim73old/src/proto/gdb.pro vim73/src/proto/gdb.pro
 +/* vim: set ft=c : */
 diff -uNr vim73old/src/proto.h vim73/src/proto.h
 --- vim73old/src/proto.h	2010-07-17 23:28:51.000000000 +0800
-+++ vim73/src/proto.h	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/proto.h	2011-04-25 09:08:39.000000000 +0800
 @@ -263,6 +263,10 @@
  #  include "if_xcmdsrv.pro"
  # endif
@@ -11319,7 +11488,7 @@ diff -uNr vim73old/src/proto.h vim73/src/proto.h
   * included before the perl include files.  But then CV is not defined, which
 diff -uNr vim73old/src/pty.c vim73/src/pty.c
 --- vim73old/src/pty.c	2010-07-25 02:23:01.000000000 +0800
-+++ vim73/src/pty.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/pty.c	2011-04-25 09:08:35.000000000 +0800
 @@ -36,6 +36,8 @@
   * Free Software Foundation, Inc.,
   * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
@@ -11331,7 +11500,7 @@ diff -uNr vim73old/src/pty.c vim73/src/pty.c
  
 diff -uNr vim73old/src/screen.c vim73/src/screen.c
 --- vim73old/src/screen.c	2010-08-13 21:21:27.000000000 +0800
-+++ vim73/src/screen.c	2010-11-14 21:06:06.000000000 +0800
++++ vim73/src/screen.c	2011-04-25 09:08:36.000000000 +0800
 @@ -6182,6 +6182,11 @@
  	fillchar = fillchar_status(&attr, wp == curwin);
  
@@ -11346,7 +11515,7 @@ diff -uNr vim73old/src/screen.c vim73/src/screen.c
  
 diff -uNr vim73old/src/structs.h vim73/src/structs.h
 --- vim73old/src/structs.h	2010-08-07 22:59:27.000000000 +0800
-+++ vim73/src/structs.h	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/structs.h	2011-04-25 09:08:39.000000000 +0800
 @@ -609,7 +609,7 @@
      linenr_T	lnum;		/* line number which has this sign */
      int		typenr;		/* typenr of sign */
@@ -11372,7 +11541,7 @@ diff -uNr vim73old/src/structs.h vim73/src/structs.h
   * Used for the global argument list and the argument lists local to a window.
 diff -uNr vim73old/src/version.c vim73/src/version.c
 --- vim73old/src/version.c	2010-08-01 21:45:48.000000000 +0800
-+++ vim73/src/version.c	2010-11-14 21:06:10.000000000 +0800
++++ vim73/src/version.c	2011-04-25 09:08:36.000000000 +0800
 @@ -246,6 +246,11 @@
  #if !defined(USE_SYSTEM) && defined(UNIX)
  	"+fork()",
@@ -11387,7 +11556,7 @@ diff -uNr vim73old/src/version.c vim73/src/version.c
  	"+gettext/dyn",
 diff -uNr vim73old/src/window.c vim73/src/window.c
 --- vim73old/src/window.c	2010-07-21 04:23:49.000000000 +0800
-+++ vim73/src/window.c	2010-11-14 21:06:08.000000000 +0800
++++ vim73/src/window.c	2011-04-25 09:08:36.000000000 +0800
 @@ -6197,6 +6197,10 @@
  # ifdef FEAT_QUICKFIX
  		    || wp->w_p_pvw
